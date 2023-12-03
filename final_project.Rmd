@@ -120,7 +120,7 @@ library(googleway)
 
 cache_file <- cachem::cache_disk("./cache/.uni_map_cachefile")
 # Set your Google Maps API key
-api_key <- "AIzaSyBwV1rgRgx-zQGm-VbSUl6Suofs4uXmkJc"
+api_key <- INSERT_YOUR_KEY
 
 # Function to get coordinates for a university by name
 get_university_coordinates <- memoise(function(university_name) {
