@@ -1,6 +1,6 @@
 ---
 title: "Final Project"
-author: "Saujanya Acharya"
+author: "Saujanya Acharya and Rona Hu"
 date: "`r Sys.Date()`"
 output: pdf_document
 ---
@@ -18,33 +18,12 @@ library(memoise)
 library(jsonlite)
 library(cachem)
 library(RSelenium)
-```
-## Step 1 : Gathering a list of accredited universities in the US and cleaning the data
-
-```{r}
-# Using data from DAPIP (Database of Accredited Postsecondary Institutions and Programs) website https://ope.ed.gov/dapip/#/home
-
-# raw_university_data <- read.csv("./data/InstitutionCampus.csv")
-# 
-# filtered_universities <- raw_university_data %>% filter(LocationType == "Institution")
-
-```
-
-```{r}
-# 
-# webpage <- read_html("~/Downloads/Search US News Best Colleges _ US News Rankings.html")
-# 
-# university_names <- webpage %>%
-#     html_nodes(".gtkLHO") %>%
-#     html_text()
-# 
-# university_names <- data.frame(LocationName = university_names)
-
-
+library(leaflet)
+library(geosphere)
 ```
 
 
-## Step 2 : Acquiring Qs University Ranking
+## Step 1 : Acquiring Qs University Ranking from 2024 data
 ```{r}
 
 tryCatch({
@@ -63,41 +42,41 @@ remote_driver <- driver[["client"]]
 scrape_university_names <- (function() {
   webpage <- read_html(remote_driver$getPageSource()[[1]])
   print(html_nodes(webpage, ".uni-link"))
-  university_names <- webpage %>%
+  universities <- webpage %>%
     html_nodes(".uni-link") %>%
     html_text()
-  return(university_names)
+  return(universities)
 })
 
 
 # Navigate to the URL
-url <- "https://www.topuniversities.com/university-rankings/usa-rankings/2021"
+url <- "https://www.topuniversities.com/world-university-rankings?region=North%20America&countries=us"
 
 remote_driver$open()
 remote_driver$navigate(url)
 
 Sys.sleep(15)
 # Scrape data and navigate to the next page iteratively
-all_university_names <- character(0)
-next_page_exists <- TRUE
+all_universities <- character(0)
+load_more_exists <- TRUE
 
-while (next_page_exists) {
+while (load_more_exists) {
   # Get university names
-  all_university_names <- c(all_university_names, scrape_university_names())
+  all_universities <- c(scrape_university_names())
   
  
   # Click on the next page button if it exists
   tryCatch({
-    hidden_button <- remote_driver$findElement(using="xpath", "//span[@class='current next']")
-    next_page_exists <- FALSE
+    hidden_button <- remote_driver$findElement(using="xpath", "//div[@pageno='13']")
+    load_more_exists <- FALSE
     
   }, error = function(e) {
-    next_button <- remote_driver$findElement(using="class name", value="next")
-    next_button$clickElement()
-    next_page_exists <- TRUE
+    load_more_button <- remote_driver$findElement(using="class name", value="loadmorebutton")
+    load_more_button$clickElement()
+    load_more_exists <- TRUE
   })
 
-  Sys.sleep(7)
+  Sys.sleep(15)
 }
   
 # 
@@ -108,11 +87,11 @@ driver$server$stop()
 
 
 # Print the extracted university names
-university_names <- data.frame(Name = all_university_names)
+university_data <- data.frame(Name = all_universities)
 
 ```
 
-## Step 3 : Getting geocodes from google maps api
+## Step 2 : Getting geocodes from google maps api
 ``` {r}
 library(googleway)
 
@@ -136,15 +115,15 @@ get_university_coordinates <- memoise(function(university_name) {
 }, cache = cache_file)
 
 # Apply the function to each university name in the data frame
-university_names$Coordinates <- lapply(university_names$Name, get_university_coordinates)
+university_data$Coordinates <- lapply(university_data$Name, get_university_coordinates)
 
 ```
 
-## Step 4 : Cleaning Google Maps Coordinate data
+## Step 5 : Cleaning Google Maps Coordinate data
 ```{r}
 
 #Takes the first result from Google Maps
-university_names$Coordinates <- lapply(university_names$Coordinates, function(x) {
+university_data$Coordinates <- lapply(university_data$Coordinates, function(x) {
   if (!any(is.na(x)) & length(x) > 2) {
     return(c(x[1], x[3]))
   } else {
@@ -152,12 +131,81 @@ university_names$Coordinates <- lapply(university_names$Coordinates, function(x)
   }
 })
 
-
-na_values <- university_names[sapply(university_names$Coordinates, function(x) any(is.na(x))), ]
-
-
-
 ```
 
+## Step 6 : Showing universities in a map
+```{r}
+
+# Assuming university_data is your data frame
+university_data$Latitude <- sapply(university_data$Coordinates, function(coord) coord[1])
+university_data$Longitude <- sapply(university_data$Coordinates, function(coord) coord[2])
+
+# Convert the new columns to numeric (if needed)
+university_data$Latitude <- as.numeric(university_data$Latitude)
+university_data$Longitude <- as.numeric(university_data$Longitude)
+
+# Create a data frame for leaflet
+map <- leaflet(university_data) %>%
+  addTiles() %>%
+  addMarkers(
+    lat = ~Latitude,
+    lng = ~Longitude,
+    popup = ~as.character(Name)  # Assuming you have a column named "Name" for university names
+  )
+
+# Print the map
+print(map)
+```
+## Clustering universities based on their latitudes and longitudes
+```{r}
+# Extract coordinates from the "Coordinates" column
+coordinates <- matrix(unlist(university_data$Coordinates), ncol = 2, byrow = TRUE)
+
+wss <- numeric(10)
+
+# Iterate over different values of k
+for (i in 1:10) {
+  # Perform k-means clustering
+  clusters <- kmeans(coordinates, centers = i)
+  
+  # Store the within-cluster sum of squares in the vector
+  wss[i] <- clusters$tot.withinss
+}
+
+# Plot the elbow curve
+plot(1:10, wss, type = "b", xlab = "Number of Clusters", ylab = "Within Sum of Squares")
+
+# Perform k-means clustering with, for example, k=5 (you can adjust this value)
+k <- 5
+clusters <- kmeans(coordinates, centers = k)
+
+# Add the cluster assignment to your data frame
+university_data$Cluster <- clusters$cluster
+
+# Display the result
+print(university_data)
+```
+## Showing the above cluster in map
+```{r}
+map <- leaflet(university_data) %>%
+  addTiles()  # You can customize the map tiles if needed
+
+cluster_colors <- c("red", "blue", "green", "orange", "purple")
+
+# Add circle markers for each university with color based on cluster
+map <- map %>%
+  addCircleMarkers(
+    lng = ~Longitude,
+    lat = ~Latitude,
+    color = ~cluster_colors[Cluster],
+    popup = ~as.character(Name),
+    label = ~as.character(Cluster),
+    radius = 6
+  ) %>%
+  addLegend("bottomright", title = "Clusters", colors = 1:k, labels = 1:k)
+
+# Print the map
+map
+```
 
 
