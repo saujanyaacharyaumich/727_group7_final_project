@@ -30,6 +30,7 @@ vignettes/*.pdf
 
 # API Keys
 .api_key.txt
+.api-key.R
 
 # knitr and R markdown default cache directories
 *_cache/
