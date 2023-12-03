@@ -1,0 +1,163 @@
+---
+title: "Final Project"
+author: "Saujanya Acharya"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r echo=FALSE}
+library(dplyr)
+library(rvest)
+library(httr)
+library(httr)
+library(memoise)
+library(jsonlite)
+library(cachem)
+library(RSelenium)
+```
+## Step 1 : Gathering a list of accredited universities in the US and cleaning the data
+
+```{r}
+# Using data from DAPIP (Database of Accredited Postsecondary Institutions and Programs) website https://ope.ed.gov/dapip/#/home
+
+# raw_university_data <- read.csv("./data/InstitutionCampus.csv")
+# 
+# filtered_universities <- raw_university_data %>% filter(LocationType == "Institution")
+
+```
+
+```{r}
+# 
+# webpage <- read_html("~/Downloads/Search US News Best Colleges _ US News Rankings.html")
+# 
+# university_names <- webpage %>%
+#     html_nodes(".gtkLHO") %>%
+#     html_text()
+# 
+# university_names <- data.frame(LocationName = university_names)
+
+
+```
+
+
+## Step 2 : Acquiring Qs University Ranking
+```{r}
+
+tryCatch({
+  driver$server$stop()
+  print("Running Selenium driver was stopped, a new session will now be started")
+}, error = function(e){
+  print("New Selenium driver to be started")
+})
+
+# Start a Selenium server
+driver <- rsDriver(browser = "firefox")
+remote_driver <- driver[["client"]]
+
+
+# Function to scrape university names
+scrape_university_names <- (function() {
+  webpage <- read_html(remote_driver$getPageSource()[[1]])
+  print(html_nodes(webpage, ".uni-link"))
+  university_names <- webpage %>%
+    html_nodes(".uni-link") %>%
+    html_text()
+  return(university_names)
+})
+
+
+# Navigate to the URL
+url <- "https://www.topuniversities.com/university-rankings/usa-rankings/2021"
+
+remote_driver$open()
+remote_driver$navigate(url)
+
+Sys.sleep(15)
+# Scrape data and navigate to the next page iteratively
+all_university_names <- character(0)
+next_page_exists <- TRUE
+
+count_of_pages <- 
+
+while (next_page_exists) {
+  # Get university names
+  all_university_names <- c(all_university_names, scrape_university_names())
+  
+ 
+  # Click on the next page button if it exists
+  tryCatch({
+    hidden_button <- remote_driver$findElement(using="xpath", "//span[@class='current next']")
+    next_page_exists <- FALSE
+    
+  }, error = function(e) {
+    next_button <- remote_driver$findElement(using="class name", value="next")
+    next_button$clickElement()
+    next_page_exists <- TRUE
+  })
+
+  Sys.sleep(7)
+}
+  
+# 
+
+# Stop the Selenium server
+remote_driver$close()
+driver$server$stop()
+
+
+# Print the extracted university names
+university_names <- data.frame(Name = all_university_names)
+
+```
+
+## Step 3 : Getting geocodes from google maps api
+``` {r}
+library(googleway)
+
+cache_file <- cachem::cache_disk("./cache/.uni_map_cachefile")
+# Set your Google Maps API key
+api_key <- "AIzaSyBwV1rgRgx-zQGm-VbSUl6Suofs4uXmkJc"
+
+# Function to get coordinates for a university by name
+get_university_coordinates <- memoise(function(university_name) {
+  result <- google_geocode(address = university_name, key = api_key)
+
+  # Check if the result contains any data
+  if (length(result$results) > 0) {
+    location <- c(result$results$geometry$location$lat, result$results$geometry$location$lng)
+    return(location)
+  } else {
+    return(c(NA, NA))
+  }
+}, cache = cache_file)
+
+# Apply the function to each university name in the data frame
+university_names$Coordinates <- lapply(university_names$Name, get_university_coordinates)
+
+```
+
+## Step 4 : Cleaning Google Maps Coordinate data
+```{r}
+
+#Takes the first result from Google Maps
+university_names$Coordinates <- lapply(university_names$Coordinates, function(x) {
+  if (!any(is.na(x)) & length(x) > 2) {
+    return(c(x[1], x[3]))
+  } else {
+    return(x)
+  }
+})
+
+
+na_values <- university_names[sapply(university_names$Coordinates, function(x) any(is.na(x))), ]
+
+
+
+```
+
+
+
